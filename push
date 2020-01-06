@@ -1,4 +1,19 @@
 #!/bin/bash
-git add .
-git commit -m $1
-git push origin master
+
+push_help() {
+    echo "To make git push easier"
+    echo "Usage":
+    echo -e "\t" "push help"
+    echo "Config"
+    echo -e "\t" "param 1 is to write a msg"
+    echo -e "\t" "param 2 is to choose a loacl branch"
+}
+
+
+if [ $# == 0 ];then
+    push_help
+else
+    git add .
+    git commit -m $1
+    git push origin $2
+fi
