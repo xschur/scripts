@@ -1,0 +1,112 @@
+#!/bin/bash
+# A POSIX shell script (it passes shellcheck) to
+#   parse Shadowsocks(R) subscription link and generate .json config files
+# Required commands: POSIX shell commands, sed, curl or wget, base64
+
+ss_local_port=1081
+ssr_local_port=1081
+timeout=300
+
+decode()
+{   # accept pipe data
+    rep=$(tr - + | tr _ /)
+    case "$((${#rep} % 4))" in
+        2) rep="$rep==" ;;
+        3) rep="$rep=" ;;
+        *) ;;
+    esac
+    echo "$rep" | base64 -d 2> /dev/null
+}
+
+decode_protocol_link()
+{
+    link="$1"
+    info="$(echo "${link#*://}" | decode)"
+    case "${link%%:*}" in
+        ss)
+            IFS=:@\  read -r method password server server_port << EOF
+                ${info%%/?*}
+EOF
+            config_file="$(echo "ss-${server:-NoServer}-${server_port:-NoPort}.json" | tr / _)"
+            echo "Saving to \"$config_file\""
+            cat > "$config_file" << EOF
+{
+    "server": "$server",
+    "server_port": $server_port,
+    "password": "$(echo "$password" | decode)",
+    "local_address": "127.0.0.1",
+    "local_port": $ss_local_port,
+    "timeout": $timeout,
+    "method": "$method",
+}
+EOF
+            ;;
+        ssr)
+            IFS=:\  read -r server server_port protocol method obfs password << EOF
+                ${info%%/?*}
+EOF
+            while read -r i; do
+                eval "${i%=*}=\"$(echo "${i#*=}" | decode)\""
+            done << EOF
+                $(echo "${info#*/?}" | sed "s/&/\n/g")
+EOF
+
+            config_file="$(echo "ssr-${group:-NoGroup}-${remarks:-Null}.json" | tr / _)"
+            echo "Saving to \"$config_file\""
+            cat > "$config_file" << EOF
+{
+    "server": "$server",
+    "server_port": $server_port,
+    "password": "$(echo "$password" | decode)",
+    "local_address": "127.0.0.1",
+    "local_port": $ssr_local_port,
+    "timeout": $timeout,
+    "method": "$method",
+    "protocol": "$protocol",
+    "protocol_param": "${protoparam:-null}",
+    "obfs": "$obfs",
+    "obfs_param": "${obfsparam:-null}"
+}
+EOF
+            ;;
+        vmess)
+            ps=$(echo "$info" | sed "s/.*\"ps\":\"\([^\"]*\)\".*/\1/")
+            add=$(echo "$info" | sed "s/.*\"add\":\"\([^\"]*\)\".*/\1/")
+            config_file="$(echo "v2ray-$add-$ps.json" | tr / _)"
+            echo "Saving to \"$config_file\""
+            echo "$info" | \
+                sed -e "s/{/{\n\t/g" \
+                    -e "s/,/,\n\t/g" \
+                    -e "s/}/\n}\n/g" \
+                > "$config_file"
+            ;;
+        http|https)
+            # wget -q -O - "$url"
+            for l in $(curl -Ss "$link" | decode); do
+                decode_protocol_link "$l"
+            done
+            ;;
+        *)
+            # support downloaded content of subscription link
+            for possible_link in $info; do
+                decode_protocol_link "$possible_link"
+            done
+            ;;
+    esac
+}
+
+if [ "$#" = 0 ]; then
+    while read -r url; do
+        decode_protocol_link "$url"
+    done
+elif [ "$#" = 1 ] && [ "$1" != "-h" ]; then
+    decode_protocol_link "$1"
+else
+    echo "Usage: $(basename "$0") link"
+    echo "       $(basename "$0") < link.txt"
+    echo
+    echo "Supported format for <link>:"
+    echo "    http(s):// subscription link, or downloaded content therein"
+    echo "    ss(r):// shadowsocks(r) encoded config"
+    echo "    vmess:// v2ray encoded config"
+fi
